@@ -11,9 +11,385 @@ library(tercen)
 library(dplyr)
 library(jsonlite)
 
+library(tidyr)
+library(ggplot2)
+library(ggcyto)
+library(flowWorkspace)
+library(flowCore)
+library(scales)
+library(ggallin)
+library(ggh4x)
+library(RColorBrewer)
+
+
 # http://127.0.0.1:5402/admin/w/77d52bb01bd3676e779828d5a50047ae/ds/36600030-7fb6-4e61-a25c-fd421ec60367
 # options("tercen.workflowId"= "77d52bb01bd3676e779828d5a50047ae")
 # options("tercen.stepId"= "36600030-7fb6-4e61-a25c-fd421ec60367")
+
+server <- shinyServer(function(input, output, session) {
+  dataInput <- reactive({
+    getValues(session)
+  })
+  
+  #output$biaxial <- renderUI({
+  #  plotOutput("main_plot",
+  #             height = input$plotHeight,
+  #             width = input$plotWidth)
+  #})
+  
+  output$biaxial <- renderPlot({
+    df <- dataInput()
+    
+    logticks_flag = ""
+    
+    breaks_x <- as.numeric(unlist(strsplit(input$breaks_x, ",")))
+    breaks_y <- as.numeric(unlist(strsplit(input$breaks_y, ",")))
+    
+    if (length(levels(df$colors)) > 74) {
+      qual_col_pals = brewer.pal.info
+    } else {
+      qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+    }
+    
+    col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+    
+    # ggplot object
+    plt = ggplot()
+    
+    if (input$x_trans_type == "biexponential") {
+      
+      trans.fun = flowjo_biexp(pos = input$pos_decades_x, 
+                               neg = input$neg_decades_x, 
+                               widthBasis = input$width_basis_x)
+      inv.fun = flowjo_biexp(pos = input$pos_decades_x, 
+                             neg = input$neg_decades_x, 
+                             widthBasis = input$width_basis_x, 
+                             inverse = TRUE)
+      
+      x.breaks = custom_logicle_breaks(breaks_x, 
+                                       trans.fun = trans.fun, 
+                                       inverse.fun = inv.fun)
+      df$x_trans = trans.fun(df$.x)
+      
+      plt = plt +
+        scale_x_continuous(
+          limits = trans.fun(c(min(breaks_x), max(breaks_x))), 
+          breaks = x.breaks[[1]],
+          labels = x.breaks[[2]]
+        )
+    } else if (input$x_trans_type == "logicle") {
+      
+      trans.fun <- logicleTransform(w = 0.5, 
+                                    t = 262144,
+                                    m = 4.5, 
+                                    a = 0)
+      inv.fun <- inverseLogicleTransform(trans = trans.fun)
+      
+      x.breaks = custom_logicle_breaks(breaks_x, 
+                                       trans.fun = trans.fun, 
+                                       inverse.fun = inv.fun)
+      df$x_trans = trans.fun(df$.x)
+      
+      plt = plt +
+        scale_x_continuous(
+          limits = trans.fun(c(min(breaks_x), max(breaks_x))), 
+          breaks = x.breaks[[1]],
+          labels = x.breaks[[2]]
+        )
+    } else if (input$x_trans_type == "log10") {
+      df$x_trans = df$.x
+      
+      plt =  plt + 
+        scale_x_continuous(
+          limits = c(min(breaks_x), max(breaks_x)),
+          breaks = breaks_x,
+          trans = ggallin::pseudolog10_trans,
+          labels = custom_log10
+        )
+      
+      logticks_flag = "b"
+    } else if (input$x_trans_type == "linear") {
+      df$x_trans = df$.x
+      
+      plt = plt +
+        scale_x_continuous(
+          limits = c(min(breaks_x), max(breaks_x)),
+          breaks = breaks_x
+        )
+    }
+    
+    if (input$y_trans_type == "biexponential") {
+      
+      trans.fun = flowjo_biexp(pos = input$pos_decades_y, 
+                               neg = input$neg_decades_y, 
+                               widthBasis = input$width_basis_y)
+      inv.fun = flowjo_biexp(pos = input$pos_decades_y, 
+                             neg = input$neg_decades_y, 
+                             widthBasis = input$width_basis_y, 
+                             inverse = TRUE)
+      
+      y.breaks = custom_logicle_breaks(breaks_y, 
+                                       trans.fun = trans.fun, 
+                                       inverse.fun = inv.fun)
+      df$y_trans = trans.fun(df$.y)
+      
+      plt = plt +
+        scale_y_continuous(
+          limits = trans.fun(c(min(breaks_y), max(breaks_y))), 
+          breaks = y.breaks[[1]],
+          labels = y.breaks[[2]]
+        )
+      
+    } else if (input$y_trans_type == "logicle") {
+      
+      trans.fun <- logicleTransform(w = 0.5, 
+                                    t = 262144,
+                                    m = 4.5, 
+                                    a = 0)
+      inv.fun <- inverseLogicleTransform(trans = trans.fun)
+      
+      y.breaks = custom_logicle_breaks(breaks_y, 
+                                       trans.fun = trans.fun, 
+                                       inverse.fun = inv.fun)
+      df$y_trans = trans.fun(df$.y)
+      
+      plt = plt +
+        scale_y_continuous(
+          limits = trans.fun(c(min(breaks_y), max(breaks_y))), 
+          breaks = y.breaks[[1]],
+          labels = y.breaks[[2]]
+        )
+      
+    } else if (input$y_trans_type == "log10") {
+      df$y_trans = df$.y
+      
+      plt = plt +
+        scale_y_continuous(
+          limits = c(min(breaks_y), max(breaks_y)),
+          breaks = breaks_y,
+          trans = ggallin::pseudolog10_trans,
+          labels = custom_log10
+        )
+      
+      logticks_flag = paste0(logticks_flag, "l")
+    } else if (input$y_trans_type == "linear") {
+      df$y_trans = df$.y
+      
+      plt = plt +
+        scale_y_continuous(
+          limits = c(min(breaks_y), max(breaks_y)),
+          breaks = breaks_y,
+        )
+    }
+    
+    
+    plt = plt + geom_point(
+      data = df,
+      mapping = aes(x = x_trans, y = y_trans, colour = colors),
+      size = 5#input$pointSize
+    ) +
+      # labels
+      labs(x = input$x_label,
+           y = input$y_label,
+           color = input$legend) +
+      ggtitle(input$title) +
+      scale_color_manual(values=col_vector[1:length(levels(df$colors))]) +
+      
+      # theme stuff
+      theme_classic() +
+      theme(
+        legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          size = 1
+        )
+      )
+    
+    if (logticks_flag != "")
+    {
+      plt = plt + annotation_logticks(sides = logticks_flag, 
+                                      outside = TRUE) + #, 
+                                      #short = unit(.05, "cm"),
+                                      #mid = unit(0.1, "cm"),
+                                      #long = unit(0.15, "cm")) +
+        coord_cartesian(clip = "off") 
+    }
+    
+    plt
+  })
+
+  output$distribution_x <- renderPlot({
+    df <- dataInput()
+    
+    breaks_x <- as.numeric(unlist(strsplit(input$breaks_x, ",")))
+    
+    # ggplot object
+    hist_x = ggplot()
+    if (input$x_trans_type == "biexponential") {
+
+      trans.fun = flowjo_biexp(pos = input$pos_decades_x, 
+                               neg = input$neg_decades_x, 
+                               widthBasis = input$width_basis_x)
+      inv.fun = flowjo_biexp(pos = input$pos_decades_x, 
+                             neg = input$neg_decades_x, 
+                             widthBasis = input$width_basis_x, 
+                             inverse = TRUE)
+      
+      x.breaks = custom_logicle_breaks(breaks_x, 
+                                       trans.fun = trans.fun, 
+                                       inverse.fun = inv.fun)
+      df$x_trans = trans.fun(df$.x)
+
+      hist_x = hist_x + geom_density(data = df, mapping = aes(x_trans)) +
+        scale_x_continuous(
+          limits = trans.fun(c(min(breaks_x), max(breaks_x))), 
+          breaks = x.breaks[[1]],
+          labels = x.breaks[[2]]
+        )
+      
+    } else if (input$x_trans_type == "logicle") {
+      
+      trans.fun <- logicleTransform(w = 0.5, 
+                                    t = 262144,
+                                    m = 4.5, 
+                                    a = 0)
+      inv.fun <- inverseLogicleTransform(trans = trans.fun)
+      
+      x.breaks = custom_logicle_breaks(breaks_x, 
+                                       trans.fun = trans.fun, 
+                                       inverse.fun = inv.fun)
+      df$x_trans = trans.fun(df$.x)
+      
+      hist_x = hist_x + geom_density(data = df, mapping = aes(x_trans)) +
+        scale_x_continuous(
+          limits = trans.fun(c(min(breaks_x), max(breaks_x))), 
+          breaks = x.breaks[[1]],
+          labels = x.breaks[[2]]
+        )
+      
+    } else if (input$x_trans_type == "log10") {
+
+      hist_x =  hist_x + geom_density(data = df, mapping = aes(.x)) +
+        scale_x_continuous(
+          limits = c(min(breaks_x), max(breaks_x)),
+          breaks = breaks_x,
+          trans = ggallin::pseudolog10_trans,
+          labels = custom_log10
+        )
+    } else if (input$x_trans_type == "linear") {
+
+      hist_x = hist_x + geom_density(data = df, mapping = aes(.x)) +
+        scale_x_continuous(
+          limits = c(min(breaks_x), max(breaks_x)),
+          breaks = breaks_x,
+        )
+    }
+    
+    plt = hist_x +
+      # theme stuff
+      theme_classic() +
+      theme(
+        legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          size = 2
+        )
+      )
+    
+    plt
+  })
+  
+  output$distribution_y <- renderPlot({
+    df <- dataInput()
+    
+    print(head(df))
+    print(levels(df$colors))
+    
+    breaks_y <- as.numeric(unlist(strsplit(input$breaks_y, ",")))
+    
+    # ggplot object
+    hist_y = ggplot()
+    if (input$y_trans_type == "biexponential") {
+      
+      trans.fun = flowjo_biexp(pos = input$pos_decades_y, 
+                               neg = input$neg_decades_y, 
+                               widthBasis = input$width_basis_y)
+      inv.fun = flowjo_biexp(pos = input$pos_decades_y, 
+                             neg = input$neg_decades_y, 
+                             widthBasis = input$width_basis_y, 
+                             inverse = TRUE)
+      
+      y.breaks = custom_logicle_breaks(breaks_y, 
+                                       trans.fun = trans.fun, 
+                                       inverse.fun = inv.fun)
+      df$y_trans = trans.fun(df$.y)
+      
+      hist_y = hist_y + geom_density(data = df, mapping = aes(y_trans)) +
+        scale_x_continuous(
+          limits = trans.fun(c(min(breaks_y), max(breaks_y))), 
+          breaks = y.breaks[[1]],
+          labels = y.breaks[[2]]
+        )
+      
+    } else if (input$y_trans_type == "logicle") {
+      
+      trans.fun <- logicleTransform(w = 0.5, 
+                                t = 262144,
+                                m = 4.5, 
+                                a = 0)
+      inv.fun <- inverseLogicleTransform(trans = trans.fun)
+      
+      y.breaks = custom_logicle_breaks(breaks_y, 
+                                       trans.fun = trans.fun, 
+                                       inverse.fun = inv.fun)
+      df$y_trans = trans.fun(df$.y)
+      
+      hist_y = hist_y + geom_density(data = df, mapping = aes(y_trans)) +
+        scale_x_continuous(
+          limits = trans.fun(c(min(breaks_y), max(breaks_y))), 
+          breaks = y.breaks[[1]],
+          labels = y.breaks[[2]]
+        )
+      
+    } else if (input$y_trans_type == "log10") {
+      
+      hist_y =  hist_y + geom_density(data = df, mapping = aes(.y)) +
+        scale_x_continuous(
+          limits = c(min(breaks_y), max(breaks_y)),
+          breaks = breaks_y,
+          trans = ggallin::pseudolog10_trans,
+          labels = custom_log10
+        )
+    } else if (input$y_trans_type == "linear") {
+      
+      hist_y = hist_y + geom_density(data = df, mapping = aes(.y)) +
+        scale_x_continuous(
+          limits = c(min(breaks_y), max(breaks_y)),
+          breaks = breaks_y,
+        )
+    }
+    
+    plt = hist_y +
+      # theme stuff
+      theme_classic() +
+      theme(
+        legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        panel.border = element_rect(
+          colour = "black",
+          fill = NA,
+          size = 2
+        )
+      )
+    
+    plt
+  })
+  
+})
 
 shinyServer(function(input, output, session) {
   
